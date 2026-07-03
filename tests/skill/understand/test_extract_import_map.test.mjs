@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(__dirname, '../../../understand-anything-plugin/skills/understand/extract-import-map.mjs');
@@ -1200,6 +1200,96 @@ describe('extract-import-map.mjs — C/C++ resolver', () => {
   });
 });
 
+describe('extract-import-map.mjs — Swift resolver', () => {
+  let projectRoot;
+
+  afterEach(() => {
+    if (projectRoot) {
+      rmSync(projectRoot, { recursive: true, force: true });
+      projectRoot = null;
+    }
+  });
+
+  it('resolves SwiftPM target imports to all files in the imported module', () => {
+    projectRoot = setupTree({
+      'Sources/App/App.swift': `public struct AppRoot {}\n`,
+      'Sources/App/Feature.swift': `public struct Feature {}\n`,
+      'Tests/AppTests/AppTests.swift':
+        `import XCTest\n` +
+        `@testable import App\n` +
+        `final class AppTests: XCTestCase {}\n`,
+    });
+
+    const result = runScript(projectRoot, {
+      projectRoot,
+      files: [
+        { path: 'Sources/App/App.swift', language: 'swift', fileCategory: 'code' },
+        { path: 'Sources/App/Feature.swift', language: 'swift', fileCategory: 'code' },
+        { path: 'Tests/AppTests/AppTests.swift', language: 'swift', fileCategory: 'code' },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output.importMap['Tests/AppTests/AppTests.swift']).toEqual([
+      'Sources/App/App.swift',
+      'Sources/App/Feature.swift',
+    ]);
+    expect(result.output.importMap['Sources/App/App.swift']).toEqual([]);
+    expect(result.output.importMap['Sources/App/Feature.swift']).toEqual([]);
+    expect(result.output.stats.filesWithImports).toBe(1);
+    expect(result.output.stats.totalEdges).toBe(2);
+  });
+
+  it('uses Package.swift custom target paths when module name differs from directory name', () => {
+    projectRoot = setupTree({
+      'Package.swift':
+        `// swift-tools-version: 5.9\n` +
+        `import PackageDescription\n` +
+        `let package = Package(\n` +
+        `  name: "Workspace",\n` +
+        `  targets: [\n` +
+        `    .target(name: "Domain", path: "Core/Model"),\n` +
+        `    .executableTarget(name: "App", path: "Clients/App")\n` +
+        `  ]\n` +
+        `)\n`,
+      'Core/Model/User.swift': `public struct User {}\n`,
+      'Clients/App/main.swift': `import Foundation\nimport Domain\nprint(User.self)\n`,
+    });
+
+    const result = runScript(projectRoot, {
+      projectRoot,
+      files: [
+        { path: 'Package.swift', language: 'swift', fileCategory: 'code' },
+        { path: 'Core/Model/User.swift', language: 'swift', fileCategory: 'code' },
+        { path: 'Clients/App/main.swift', language: 'swift', fileCategory: 'code' },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output.importMap['Clients/App/main.swift']).toEqual([
+      'Core/Model/User.swift',
+    ]);
+    expect(result.output.importMap['Package.swift']).toEqual([]);
+  });
+
+  it('drops Swift SDK imports when no project module matches', () => {
+    projectRoot = setupTree({
+      'Sources/App/View.swift': `import SwiftUI\nimport Foundation\nstruct RootView {}\n`,
+    });
+
+    const result = runScript(projectRoot, {
+      projectRoot,
+      files: [
+        { path: 'Sources/App/View.swift', language: 'swift', fileCategory: 'code' },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output.importMap['Sources/App/View.swift']).toEqual([]);
+    expect(result.output.stats.totalEdges).toBe(0);
+  });
+});
+
 describe('extract-import-map.mjs — per-file failure resilience', () => {
   let projectRoot;
 
@@ -1722,7 +1812,7 @@ describe('extract-import-map.mjs — tree-sitter init graceful failure', () => {
           { path: 'src/lib.ts', language: 'typescript', fileCategory: 'code' },
         ],
       },
-      ['--import', loaderPath],
+      ['--import', pathToFileURL(loaderPath).href],
     );
 
     expect(result.status).toBe(0);
