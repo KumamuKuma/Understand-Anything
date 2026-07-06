@@ -197,6 +197,69 @@ object Command {
       parser.delete();
     });
 
+    it("extracts extension methods inside objects", () => {
+      const { tree, parser, root } = parse(`object syntax {
+  extension (s: String)
+    def shout: String = s.toUpperCase
+}
+`);
+      const result = extractor.extractStructure(root);
+
+      const syntax = result.classes.find((c) => c.name === "syntax");
+      expect(syntax?.methods).toContain("shout");
+      expect(result.functions.map((f) => f.name)).toContain("shout");
+      expect(result.exports.map((e) => e.name)).toEqual(
+        expect.arrayContaining(["syntax", "shout"]),
+      );
+
+      tree.delete();
+      parser.delete();
+    });
+
+    it("extracts declarations inside braced package clauses", () => {
+      const { tree, parser, root } = parse(`package com.example {
+  class Foo
+
+  object Bar {
+    def run(): Unit = ()
+  }
+}
+`);
+      const result = extractor.extractStructure(root);
+
+      expect(result.classes.map((c) => c.name)).toEqual(["Foo", "Bar"]);
+      expect(result.functions.map((f) => f.name)).toEqual(["run"]);
+      expect(result.exports.map((e) => e.name)).toEqual(
+        expect.arrayContaining(["Foo", "run", "Bar"]),
+      );
+
+      tree.delete();
+      parser.delete();
+    });
+
+    it("extracts package objects with their members", () => {
+      const { tree, parser, root } = parse(`package com.example
+
+package object syntax {
+  val defaultTimeout: Int = 30
+  def helper(x: Int): Int = x
+}
+`);
+      const result = extractor.extractStructure(root);
+
+      expect(result.classes).toHaveLength(1);
+      expect(result.classes[0].name).toBe("syntax");
+      expect(result.classes[0].properties).toEqual(["defaultTimeout"]);
+      expect(result.classes[0].methods).toEqual(["helper"]);
+      expect(result.functions.map((f) => f.name)).toEqual(["helper"]);
+      expect(result.exports.map((e) => e.name)).toEqual(
+        expect.arrayContaining(["defaultTimeout", "helper", "syntax"]),
+      );
+
+      tree.delete();
+      parser.delete();
+    });
+
     it("extracts a Scala 3 enum with its cases as properties", () => {
       const { tree, parser, root } = parse(`enum Color {
   case Red, Green, Blue
@@ -211,6 +274,7 @@ object Command {
       tree.delete();
       parser.delete();
     });
+
   });
 
   describe("extractStructure - imports", () => {
@@ -222,6 +286,30 @@ object Command {
       expect(result.imports).toHaveLength(1);
       expect(result.imports[0].source).toBe("cats.effect.IO");
       expect(result.imports[0].specifiers).toEqual(["IO"]);
+
+      tree.delete();
+      parser.delete();
+    });
+
+    it("extracts multiple importers from one import declaration", () => {
+      const { tree, parser, root } = parse(`import cats.effect.IO, scala.concurrent.Future
+import cats.effect.{Resource, ExitCode}, scala.concurrent.duration.*
+`);
+      const result = extractor.extractStructure(root);
+
+      expect(result.imports).toHaveLength(4);
+      expect(result.imports.map((i) => i.source)).toEqual([
+        "cats.effect.IO",
+        "scala.concurrent.Future",
+        "cats.effect",
+        "scala.concurrent.duration",
+      ]);
+      expect(result.imports.map((i) => i.specifiers)).toEqual([
+        ["IO"],
+        ["Future"],
+        ["Resource", "ExitCode"],
+        ["*"],
+      ]);
 
       tree.delete();
       parser.delete();
@@ -256,15 +344,28 @@ import scala.concurrent.duration.*
       parser.delete();
     });
 
-    it("extracts renamed imports (Scala 2 arrow and Scala 3 as)", () => {
+    it("extracts source names for renamed imports (Scala 2 arrow and Scala 3 as)", () => {
       const { tree, parser, root } = parse(`import cats.effect.{IO => Effect}
 import cats.effect.kernel.{Async as AsyncEff}
 `);
       const result = extractor.extractStructure(root);
 
       expect(result.imports).toHaveLength(2);
-      expect(result.imports[0].specifiers).toEqual(["Effect"]);
-      expect(result.imports[1].specifiers).toEqual(["AsyncEff"]);
+      expect(result.imports[0].specifiers).toEqual(["IO"]);
+      expect(result.imports[1].specifiers).toEqual(["Async"]);
+
+      tree.delete();
+      parser.delete();
+    });
+
+    it("does not treat excluded renamed imports as imported specifiers", () => {
+      const { tree, parser, root } = parse(`import cats.effect.{IO, Resource => _, Async as AsyncEff}
+`);
+      const result = extractor.extractStructure(root);
+
+      expect(result.imports).toHaveLength(1);
+      expect(result.imports[0].source).toBe("cats.effect");
+      expect(result.imports[0].specifiers).toEqual(["IO", "Async"]);
 
       tree.delete();
       parser.delete();
@@ -294,6 +395,21 @@ private class Internal
       parser.delete();
     });
 
+    it("does not export public members inherited from a private outer type", () => {
+      const { tree, parser, root } = parse(`private class Internal {
+  def leak(): Unit = ()
+}
+`);
+      const result = extractor.extractStructure(root);
+
+      const exported = result.exports.map((e) => e.name);
+      expect(exported).not.toContain("Internal");
+      expect(exported).not.toContain("leak");
+
+      tree.delete();
+      parser.delete();
+    });
+
     it("treats private[scope] as not exported", () => {
       const { tree, parser, root } = parse(`private[service] def helper(): Unit = ()
 `);
@@ -315,6 +431,22 @@ given intOrd: Ordering[Int] = Ordering.Int
       const exported = result.exports.map((e) => e.name);
       expect(exported).toContain("defaultTimeout");
       expect(exported).toContain("intOrd");
+
+      tree.delete();
+      parser.delete();
+    });
+
+    it("extracts Scala 3 export declarations", () => {
+      const { tree, parser, root } = parse(`export service.{run as start, stop}
+export config.defaultTimeout
+`);
+      const result = extractor.extractStructure(root);
+
+      expect(result.exports.map((e) => e.name)).toEqual([
+        "start",
+        "stop",
+        "defaultTimeout",
+      ]);
 
       tree.delete();
       parser.delete();
@@ -360,6 +492,25 @@ def caller(): Unit = {
       expect(callees).toContain("pure");
       // `compute(1)` is not inside a function definition
       expect(callees).not.toContain("compute");
+
+      tree.delete();
+      parser.delete();
+    });
+
+    it("extracts infix and constructor calls", () => {
+      const { tree, parser, root } = parse(`def caller(xs: List[Int]): Unit = {
+  xs map println
+  val x = new Foo()
+}
+`);
+      const entries = extractor.extractCallGraph(root);
+
+      expect(entries).toContainEqual(
+        expect.objectContaining({ caller: "caller", callee: "map" }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({ caller: "caller", callee: "Foo" }),
+      );
 
       tree.delete();
       parser.delete();

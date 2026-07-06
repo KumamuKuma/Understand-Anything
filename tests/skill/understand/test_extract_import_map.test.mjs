@@ -888,6 +888,10 @@ describe('extract-import-map.mjs — Scala resolver', () => {
         `package com.example.util\n\nobject Other\n`,
       'src/main/scala/com/example/model/package.scala':
         `package com.example\n\npackage object model\n`,
+      'src/main/scala/com/example/model/User.scala':
+        `package com.example.model\n\ncase class User(id: Long)\n`,
+      'src/main/scala/com/example/model/Order.scala':
+        `package com.example.model\n\ncase class Order(id: Long)\n`,
     });
 
     const files = [
@@ -896,6 +900,8 @@ describe('extract-import-map.mjs — Scala resolver', () => {
       { path: 'src/main/scala/com/example/util/Helper.scala', language: 'scala', fileCategory: 'code' },
       { path: 'src/main/scala/com/example/util/Other.scala', language: 'scala', fileCategory: 'code' },
       { path: 'src/main/scala/com/example/model/package.scala', language: 'scala', fileCategory: 'code' },
+      { path: 'src/main/scala/com/example/model/User.scala', language: 'scala', fileCategory: 'code' },
+      { path: 'src/main/scala/com/example/model/Order.scala', language: 'scala', fileCategory: 'code' },
     ];
 
     const result = runScript(projectRoot, { projectRoot, files });
@@ -903,9 +909,84 @@ describe('extract-import-map.mjs — Scala resolver', () => {
     expect(result.status).toBe(0);
     expect(result.output.importMap['src/main/scala/com/example/Main.scala']).toEqual([
       'src/main/scala/com/example/foo/Bar.scala',
+      'src/main/scala/com/example/model/Order.scala',
+      'src/main/scala/com/example/model/User.scala',
       'src/main/scala/com/example/model/package.scala',
       'src/main/scala/com/example/util/Helper.scala',
       'src/main/scala/com/example/util/Other.scala',
+    ]);
+  });
+
+  it('resolves renamed selector imports by original source names', () => {
+    projectRoot = setupTree({
+      'src/main/scala/com/example/Main.scala':
+        `package com.example\n\nimport com.example.util.{Helper => H, Other as O}\n\nobject Main\n`,
+      'src/main/scala/com/example/util/Helper.scala':
+        `package com.example.util\n\nobject Helper\n`,
+      'src/main/scala/com/example/util/Other.scala':
+        `package com.example.util\n\nobject Other\n`,
+    });
+
+    const result = runScript(projectRoot, {
+      projectRoot,
+      files: [
+        { path: 'src/main/scala/com/example/Main.scala', language: 'scala', fileCategory: 'code' },
+        { path: 'src/main/scala/com/example/util/Helper.scala', language: 'scala', fileCategory: 'code' },
+        { path: 'src/main/scala/com/example/util/Other.scala', language: 'scala', fileCategory: 'code' },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output.importMap['src/main/scala/com/example/Main.scala']).toEqual([
+      'src/main/scala/com/example/util/Helper.scala',
+      'src/main/scala/com/example/util/Other.scala',
+    ]);
+  });
+
+  it('does not add package.scala when a plain import resolves directly', () => {
+    projectRoot = setupTree({
+      'src/main/scala/com/example/Main.scala':
+        `package com.example\n\nimport com.example.pkg.Bar\n\nobject Main\n`,
+      'src/main/scala/com/example/pkg/Bar.scala':
+        `package com.example.pkg\n\nclass Bar\n`,
+      'src/main/scala/com/example/pkg/package.scala':
+        `package com.example\n\npackage object pkg { val defaultTimeout = 30 }\n`,
+    });
+
+    const result = runScript(projectRoot, {
+      projectRoot,
+      files: [
+        { path: 'src/main/scala/com/example/Main.scala', language: 'scala', fileCategory: 'code' },
+        { path: 'src/main/scala/com/example/pkg/Bar.scala', language: 'scala', fileCategory: 'code' },
+        { path: 'src/main/scala/com/example/pkg/package.scala', language: 'scala', fileCategory: 'code' },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output.importMap['src/main/scala/com/example/Main.scala']).toEqual([
+      'src/main/scala/com/example/pkg/Bar.scala',
+    ]);
+  });
+
+  it('resolves imports to .sc Scala script targets', () => {
+    projectRoot = setupTree({
+      'src/main/scala/com/example/Main.scala':
+        `package com.example\n\nimport com.example.scripts.Task\n\nobject Main\n`,
+      'src/main/scala/com/example/scripts/Task.sc':
+        `package com.example.scripts\n\nobject Task\n`,
+    });
+
+    const result = runScript(projectRoot, {
+      projectRoot,
+      files: [
+        { path: 'src/main/scala/com/example/Main.scala', language: 'scala', fileCategory: 'code' },
+        { path: 'src/main/scala/com/example/scripts/Task.sc', language: 'scala', fileCategory: 'code' },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output.importMap['src/main/scala/com/example/Main.scala']).toEqual([
+      'src/main/scala/com/example/scripts/Task.sc',
     ]);
   });
 

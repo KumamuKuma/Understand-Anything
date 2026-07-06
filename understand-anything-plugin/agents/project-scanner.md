@@ -96,7 +96,7 @@ The script:
 | `LICENSE` | `code` (exception — not docs) |
 | `Dockerfile`, `Dockerfile.*`, `docker-compose.*`, `compose.yml`/`compose.yaml`, `Makefile`, `Jenkinsfile`, `Procfile`, `Vagrantfile`, `.gitlab-ci.yml`, `.dockerignore`, `.github/workflows/*`, `.circleci/*`, paths in `k8s/` or `kubernetes/`, `*.k8s.yml`/`*.k8s.yaml` | `infra` |
 | `.md`, `.mdx`, `.rst`, `.txt`, `.text` (except `LICENSE`) | `docs` |
-| `.yaml`, `.yml`, `.json`, `.jsonc`, `.toml`, `.xml`, `.xsl`, `.xsd`, `.plist`, `.cfg`, `.ini`, `.env`, `.properties`, `.csproj`, `.sln`, `.mod`, `.sum`, `.gradle` | `config` |
+| `.yaml`, `.yml`, `.json`, `.jsonc`, `.toml`, `.xml`, `.xsl`, `.xsd`, `.plist`, `.cfg`, `.ini`, `.env`, `.properties`, `.csproj`, `.sln`, `.mod`, `.sum`, `.gradle`, `.sbt` | `config` |
 | `.tf`, `.tfvars` | `infra` |
 | `.sql`, `.graphql`, `.gql`, `.proto`, `.prisma`, `.csv`, `.tsv` | `data` |
 | `.sh`, `.bash`, `.zsh`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd` | `script` |

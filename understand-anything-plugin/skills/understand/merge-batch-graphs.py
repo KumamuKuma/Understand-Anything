@@ -99,6 +99,7 @@ _TEST_NAME_PATTERNS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     ".py": (("test_",), ("_test",)),
     ".java": ((), ("Test", "Tests", "IT")),
     ".kt": ((), ("Test", "Tests")),
+    ".scala": ((), ("Spec", "Suite", "Test", "Tests")),
     ".cs": ((), ("Test", "Tests")),
     ".c": (("test_",), ("_test",)),
     ".cpp": (("test_",), ("_test",)),
@@ -450,15 +451,17 @@ def production_candidates(test_path: str) -> list[str]:
         for suffix in ("Spec", "Suite", "Tests", "Test"):
             if stem.endswith(suffix):
                 base_stem = stem[: -len(suffix)]
-                # sbt layout: swap src/test/scala/... -> src/main/scala/...
-                if (
-                    len(dir_segs) >= 3
-                    and dir_segs[0] == "src"
-                    and dir_segs[1] == "test"
-                    and dir_segs[2] == "scala"
-                ):
-                    new_dir = "/".join(["src", "main", "scala"] + list(dir_segs[3:]))
-                    _add_unique(candidates, f"{new_dir}/{base_stem}.scala")
+                # sbt layout: swap any .../src/test/scala/... segment while
+                # preserving a module prefix such as modules/core/.
+                for i in range(0, max(len(dir_segs) - 2, 0)):
+                    if list(dir_segs[i : i + 3]) == ["src", "test", "scala"]:
+                        new_dir = "/".join(
+                            list(dir_segs[:i])
+                            + ["src", "main", "scala"]
+                            + list(dir_segs[i + 3 :])
+                        )
+                        _add_unique(candidates, f"{new_dir}/{base_stem}.scala")
+                        break
                 _add_unique(candidates, _join(dir_path, f"{base_stem}.scala"))
                 break
 

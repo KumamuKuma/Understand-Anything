@@ -483,7 +483,9 @@ async function buildResolutionContext(projectRoot, files) {
   // Kotlin, Scala, C#). Indexed once; reused for every import dispatch.
   const javaIndex = buildSuffixIndex(files, p => p.endsWith('.java'));
   const kotlinIndex = buildSuffixIndex(files, p => p.endsWith('.kt'));
-  const scalaIndex = buildSuffixIndex(files, p => p.endsWith('.scala'));
+  const scalaFilePredicate = p => p.endsWith('.scala') || p.endsWith('.sc');
+  const scalaIndex = buildSuffixIndex(files, scalaFilePredicate);
+  const scalaPackageIndex = buildPackageIndex(files, scalaFilePredicate);
   const csIndex = buildSuffixIndex(files, p => p.endsWith('.cs'));
   const swiftModuleIndex = buildSwiftModuleIndex(files, swiftResult.targets);
 
@@ -496,6 +498,7 @@ async function buildResolutionContext(projectRoot, files) {
     javaIndex,
     kotlinIndex,
     scalaIndex,
+    scalaPackageIndex,
     csIndex,
     swiftModuleIndex,
     phpAutoloads,
@@ -1024,6 +1027,27 @@ function buildSuffixIndex(files, extPredicate) {
   return idx;
 }
 
+function buildPackageIndex(files, extPredicate) {
+  const idx = new Map();
+  for (const f of files) {
+    const p = toPosix(f.path);
+    if (!extPredicate(p)) continue;
+    const dir = dirOf(p);
+    if (!dir) continue;
+
+    const parts = dir.split('/');
+    for (let i = 0; i < parts.length; i++) {
+      const suffix = parts.slice(i).join('/');
+      if (!idx.has(suffix)) idx.set(suffix, []);
+      idx.get(suffix).push(p);
+    }
+  }
+  for (const arr of idx.values()) {
+    arr.sort((a, b) => a.localeCompare(b));
+  }
+  return idx;
+}
+
 const SWIFT_SOURCE_ROOT_DIRS = new Set(['source', 'sources', 'test', 'tests']);
 const SWIFT_MODULE_CONTAINER_DIRS = new Set([
   'framework',
@@ -1166,35 +1190,61 @@ export function resolveKotlinImport(rawImport, _file, ctx) {
 
 export function resolveScalaImport(rawImport, specifiers, _file, ctx) {
   const out = new Set();
-
-  for (const m of resolveDottedFqn(rawImport, '.scala', ctx.scalaIndex)) {
-    out.add(m);
-  }
-
   const specs = Array.isArray(specifiers) ? specifiers : [];
-  let pkg = rawImport;
-  if (specs.length === 1 && rawImport.endsWith(`.${specs[0]}`)) {
-    // Plain import: the source already names the member; the package is the
-    // prefix before the final segment.
-    pkg = rawImport.slice(0, -(specs[0].length + 1));
-  } else {
-    // Selector or wildcard import: the source IS the package. Probe each
-    // named selector as `<pkg>.<name>`.
-    for (const spec of specs) {
-      if (!spec || spec === '*') continue;
-      for (const m of resolveDottedFqn(`${rawImport}.${spec}`, '.scala', ctx.scalaIndex)) {
-        out.add(m);
-      }
-    }
+  const isPlain =
+    specs.length === 1 &&
+    specs[0] &&
+    specs[0] !== '*' &&
+    rawImport.endsWith(`.${specs[0]}`);
+
+  if (specs.includes('*')) {
+    for (const m of resolveScalaPackage(rawImport, ctx)) out.add(m);
+    return [...out].sort((a, b) => a.localeCompare(b));
   }
 
-  if (pkg) {
-    for (const m of resolveDottedFqn(`${pkg}.package`, '.scala', ctx.scalaIndex)) {
-      out.add(m);
+  if (isPlain) {
+    for (const m of resolveScalaDottedFqn(rawImport, ctx)) out.add(m);
+    if (out.size === 0) {
+      const pkg = rawImport.slice(0, -(specs[0].length + 1));
+      for (const m of resolveScalaDottedFqn(`${pkg}.package`, ctx)) out.add(m);
     }
+    return [...out].sort((a, b) => a.localeCompare(b));
   }
 
-  return [...out];
+  let unresolvedSelector = false;
+  for (const spec of specs) {
+    if (!spec) continue;
+    const matches = resolveScalaDottedFqn(`${rawImport}.${spec}`, ctx);
+    if (matches.length === 0) unresolvedSelector = true;
+    for (const m of matches) out.add(m);
+  }
+
+  if (unresolvedSelector) {
+    for (const m of resolveScalaDottedFqn(`${rawImport}.package`, ctx)) out.add(m);
+  }
+
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
+
+function resolveScalaDottedFqn(fqn, ctx) {
+  return [
+    ...resolveDottedFqn(fqn, '.scala', ctx.scalaIndex),
+    ...resolveDottedFqn(fqn, '.sc', ctx.scalaIndex),
+  ];
+}
+
+function resolveScalaPackage(pkg, ctx) {
+  if (!pkg || typeof pkg !== 'string') return [];
+  const dirPart = pkg.replace(/\.\*$/, '').replace(/\./g, '/');
+  const matches = ctx.scalaPackageIndex.get(dirPart);
+  return matches ? [...matches].sort(compareScalaPackageMembers) : [];
+}
+
+function compareScalaPackageMembers(a, b) {
+  const aPackage = /\/package\.s(?:cala|c)$/.test(a);
+  const bPackage = /\/package\.s(?:cala|c)$/.test(b);
+  if (dirOf(a) === dirOf(b) && aPackage !== bPackage) return aPackage ? 1 : -1;
+  return a.localeCompare(b);
 }
 
 // ---------------------------------------------------------------------------
@@ -1860,7 +1910,11 @@ async function main() {
           }
         }
       }
-      resolved = [...resolvedSet].sort((a, b) => a.localeCompare(b));
+      resolved = [...resolvedSet].sort((a, b) =>
+        file.language === 'scala'
+          ? compareScalaPackageMembers(a, b)
+          : a.localeCompare(b),
+      );
     } catch (err) {
       process.stderr.write(
         `Warning: extract-import-map: import resolution failed for ${path} ` +
