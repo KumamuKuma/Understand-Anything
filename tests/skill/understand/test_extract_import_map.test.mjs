@@ -866,6 +866,72 @@ describe('extract-import-map.mjs — Kotlin resolver', () => {
   });
 });
 
+describe('extract-import-map.mjs — Scala resolver', () => {
+  let projectRoot;
+
+  afterEach(() => {
+    if (projectRoot) {
+      rmSync(projectRoot, { recursive: true, force: true });
+      projectRoot = null;
+    }
+  });
+
+  it('resolves plain, selector-list, and package-object imports', () => {
+    projectRoot = setupTree({
+      'src/main/scala/com/example/Main.scala':
+        `package com.example\n\nimport com.example.foo.Bar\nimport com.example.util.{Helper, Other}\nimport com.example.model._\n\nobject Main\n`,
+      'src/main/scala/com/example/foo/Bar.scala':
+        `package com.example.foo\n\nclass Bar\n`,
+      'src/main/scala/com/example/util/Helper.scala':
+        `package com.example.util\n\nobject Helper\n`,
+      'src/main/scala/com/example/util/Other.scala':
+        `package com.example.util\n\nobject Other\n`,
+      'src/main/scala/com/example/model/package.scala':
+        `package com.example\n\npackage object model\n`,
+    });
+
+    const files = [
+      { path: 'src/main/scala/com/example/Main.scala', language: 'scala', fileCategory: 'code' },
+      { path: 'src/main/scala/com/example/foo/Bar.scala', language: 'scala', fileCategory: 'code' },
+      { path: 'src/main/scala/com/example/util/Helper.scala', language: 'scala', fileCategory: 'code' },
+      { path: 'src/main/scala/com/example/util/Other.scala', language: 'scala', fileCategory: 'code' },
+      { path: 'src/main/scala/com/example/model/package.scala', language: 'scala', fileCategory: 'code' },
+    ];
+
+    const result = runScript(projectRoot, { projectRoot, files });
+
+    expect(result.status).toBe(0);
+    expect(result.output.importMap['src/main/scala/com/example/Main.scala']).toEqual([
+      'src/main/scala/com/example/foo/Bar.scala',
+      'src/main/scala/com/example/model/package.scala',
+      'src/main/scala/com/example/util/Helper.scala',
+      'src/main/scala/com/example/util/Other.scala',
+    ]);
+  });
+
+  it('drops scala external imports (cats.effect, scala.concurrent, etc.)', () => {
+    projectRoot = setupTree({
+      'src/app/App.scala':
+        `package app\n\nimport cats.effect.IO\nimport scala.concurrent.Future\nimport app.Local\n\nobject App\n`,
+      'src/app/Local.scala':
+        `package app\n\nclass Local\n`,
+    });
+
+    const result = runScript(projectRoot, {
+      projectRoot,
+      files: [
+        { path: 'src/app/App.scala', language: 'scala', fileCategory: 'code' },
+        { path: 'src/app/Local.scala', language: 'scala', fileCategory: 'code' },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    // cats.effect/scala.concurrent are external (no project file matches);
+    // app.Local maps via suffix to src/app/Local.scala.
+    expect(result.output.importMap['src/app/App.scala']).toEqual(['src/app/Local.scala']);
+  });
+});
+
 describe('extract-import-map.mjs — C# resolver', () => {
   let projectRoot;
 

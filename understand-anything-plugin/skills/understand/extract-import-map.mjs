@@ -480,9 +480,10 @@ async function buildResolutionContext(projectRoot, files) {
   }
 
   // Build per-extension suffix indices for dotted-FQN resolvers (Java,
-  // Kotlin, C#). Indexed once; reused for every import dispatch.
+  // Kotlin, Scala, C#). Indexed once; reused for every import dispatch.
   const javaIndex = buildSuffixIndex(files, p => p.endsWith('.java'));
   const kotlinIndex = buildSuffixIndex(files, p => p.endsWith('.kt'));
+  const scalaIndex = buildSuffixIndex(files, p => p.endsWith('.scala'));
   const csIndex = buildSuffixIndex(files, p => p.endsWith('.cs'));
   const swiftModuleIndex = buildSwiftModuleIndex(files, swiftResult.targets);
 
@@ -494,6 +495,7 @@ async function buildResolutionContext(projectRoot, files) {
     goFilesByDir,
     javaIndex,
     kotlinIndex,
+    scalaIndex,
     csIndex,
     swiftModuleIndex,
     phpAutoloads,
@@ -1144,6 +1146,58 @@ export function resolveKotlinImport(rawImport, _file, ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Scala resolver
+//
+// Scala imports come from the core ScalaExtractor in three shapes:
+//   - plain:    `import com.example.Foo`      -> source='com.example.Foo',
+//                                                specifiers=['Foo']
+//   - selector: `import com.example.{A, B}`   -> source='com.example',
+//                                                specifiers=['A', 'B']
+//   - wildcard: `import com.example._` / `.*` -> source='com.example',
+//                                                specifiers=['*']
+//
+// The plain source resolves like Java (`com/example/Foo.scala` suffix probe).
+// Selector lists probe each specifier under the source package. Scala also
+// allows package objects (`com/example/package.scala`) to hold members, so
+// the package prefix is additionally probed against `<pkg>/package.scala`.
+// Multi-type files (a `model.scala` holding many case classes) can't be
+// resolved by name probing — same accepted limitation as Java/Kotlin/C#.
+// ---------------------------------------------------------------------------
+
+export function resolveScalaImport(rawImport, specifiers, _file, ctx) {
+  const out = new Set();
+
+  for (const m of resolveDottedFqn(rawImport, '.scala', ctx.scalaIndex)) {
+    out.add(m);
+  }
+
+  const specs = Array.isArray(specifiers) ? specifiers : [];
+  let pkg = rawImport;
+  if (specs.length === 1 && rawImport.endsWith(`.${specs[0]}`)) {
+    // Plain import: the source already names the member; the package is the
+    // prefix before the final segment.
+    pkg = rawImport.slice(0, -(specs[0].length + 1));
+  } else {
+    // Selector or wildcard import: the source IS the package. Probe each
+    // named selector as `<pkg>.<name>`.
+    for (const spec of specs) {
+      if (!spec || spec === '*') continue;
+      for (const m of resolveDottedFqn(`${rawImport}.${spec}`, '.scala', ctx.scalaIndex)) {
+        out.add(m);
+      }
+    }
+  }
+
+  if (pkg) {
+    for (const m of resolveDottedFqn(`${pkg}.package`, '.scala', ctx.scalaIndex)) {
+      out.add(m);
+    }
+  }
+
+  return [...out];
+}
+
+// ---------------------------------------------------------------------------
 // C# resolver
 //
 // C# `using Foo.Bar;` declarations are typically NAMESPACES, not files, and
@@ -1638,6 +1692,9 @@ function resolveImport(imp, file, ctx) {
   }
   if (lang === 'kotlin') {
     return resolveKotlinImport(src, file, ctx);
+  }
+  if (lang === 'scala') {
+    return resolveScalaImport(src, imp.specifiers, file, ctx);
   }
   if (lang === 'csharp') {
     return resolveCSharpImport(src, file, ctx);

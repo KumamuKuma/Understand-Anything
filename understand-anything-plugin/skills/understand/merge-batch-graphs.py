@@ -445,6 +445,23 @@ def production_candidates(test_path: str) -> list[str]:
                 _add_unique(candidates, _join(dir_path, f"{base_stem}.kt"))
                 break
 
+    # ── Scala ─────────────────────────────────────────────────────────
+    elif ext == ".scala":
+        for suffix in ("Spec", "Suite", "Tests", "Test"):
+            if stem.endswith(suffix):
+                base_stem = stem[: -len(suffix)]
+                # sbt layout: swap src/test/scala/... -> src/main/scala/...
+                if (
+                    len(dir_segs) >= 3
+                    and dir_segs[0] == "src"
+                    and dir_segs[1] == "test"
+                    and dir_segs[2] == "scala"
+                ):
+                    new_dir = "/".join(["src", "main", "scala"] + list(dir_segs[3:]))
+                    _add_unique(candidates, f"{new_dir}/{base_stem}.scala")
+                _add_unique(candidates, _join(dir_path, f"{base_stem}.scala"))
+                break
+
     # ── C# ────────────────────────────────────────────────────────────
     elif ext == ".cs":
         for suffix in ("Tests", "Test"):
